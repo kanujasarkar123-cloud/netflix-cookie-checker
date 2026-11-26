@@ -1237,11 +1237,11 @@ def check_cookie(cookie_text: str, generate_token: bool = True, bulk_mode: bool 
             "message": f"No Netflix session cookies found. Got: {', '.join(list(cookies.keys())[:8])}",
         }
 
-    # Generous timeouts — Netflix needs breathing room, especially under concurrent load.
-    # Proxy gets the same time as direct so the race is fair; dead proxies lose fast
-    # because their TCP handshake fails immediately (no timeout needed to detect them).
-    _proxy_timeout  = 5  if bulk_mode else 8    # seconds per proxy attempt
-    _direct_timeout = 10 if bulk_mode else 14   # direct gets more time — most reliable
+    # Aggressive timeouts — fastest healthy proxy wins the race; slower ones
+    # simply lose, get one-strike-removed from the pool, and never slow the
+    # verdict down. Dead proxies still die instantly (TCP fail = no wait).
+    _proxy_timeout  = 4  if bulk_mode else 6    # seconds per proxy attempt
+    _direct_timeout = 8  if bulk_mode else 12   # direct gets more time — most reliable
     _timeout = _direct_timeout                  # used by NFToken
     session, using_curl = _make_session(bulk_mode)
     session.cookies.clear()   # flush response-cookies from the previous check
@@ -1329,14 +1329,14 @@ def check_cookie(cookie_text: str, generate_token: bool = True, bulk_mode: bool 
                 return "FAIL", ""
 
             # ── Proxy-only (proxy ON) — never touch server IP ─────────────────
-            RACE_N  = int(os.environ.get("RACE_N", "4"))
+            RACE_N  = int(os.environ.get("RACE_N", "6"))
             proxies = _proxy_manager.get_top_proxies_dicts(RACE_N)
             proxies = [p for p in proxies if p]
             if not proxies:
                 logger.debug("_smart_check: proxy pool empty, returning FAIL")
                 return "FAIL", ""
 
-            max_wait = _proxy_timeout + 3
+            max_wait = _proxy_timeout + 1.5
 
             # Worker creates session from ITS OWN thread → safe, no sharing
             def _proxy_worker(proxy_dict):
@@ -1399,44 +1399,37 @@ def check_cookie(cookie_text: str, generate_token: bool = True, bulk_mode: bool 
             finally:
                 race_pool.shutdown(wait=True)
 
-        # ── Main fetch — 3-layer error elimination ────────────────────────────
-        #
-        # Layer 1: /account/membership   (richest data, primary target)
-        # Layer 2: /browse               (different URL — bypasses some proxy blocks)
-        # Layer 3: retry /membership after 0.5s pause (proxies rotate, fresh pick)
-        #          → single mode only; bulk skips this to keep speed acceptable
-        #
-        # ERROR is only returned if ALL layers fail, which in practice means
-        # the proxy pool is empty or Replit's network is down.
-
-        s, h = _smart_check("https://www.netflix.com/account/membership")
-        if s in ("OK", "INVALID"):
-            return s, h
-
-        s, h = _smart_check("https://www.netflix.com/browse")
-        if s in ("OK", "INVALID"):
-            return s, h
-
-        if not bulk_mode:
-            time.sleep(0.5)
+        # ── Retry rounds — race fresh proxies until a definitive verdict ──────
+        # Each round races RACE_N fresh IPs per URL (pool rotation), so a round
+        # that starts on dead proxies gets another shot with brand-new ones.
+        #   bulk   → 2 rounds ≈ 24 parallel proxy attempts per cookie
+        #   single → 3 rounds ≈ 36 parallel proxy attempts per cookie
+        # A verdict (OK / INVALID) is returned the moment any round confirms it.
+        _rounds = 2 if bulk_mode else 3
+        for _round in range(_rounds):
             s, h = _smart_check("https://www.netflix.com/account/membership")
             if s in ("OK", "INVALID"):
                 return s, h
+            s, h = _smart_check("https://www.netflix.com/browse")
+            if s in ("OK", "INVALID"):
+                return s, h
+            if _round < _rounds - 1:
+                time.sleep(0.2)   # tiny pause — rotation serves fresh IPs next round
 
-        # ── Consistency safety net ────────────────────────────────────────
-        # Proxy mode is ON but the pool has no usable IPs right now (sources
-        # refilling / all dead). A check must NEVER end as ERROR just because
-        # the pool is empty — fall back to one direct attempt so the verdict
-        # (valid / invalid) stays consistent for the user.
-        if _proxy_active and _proxy_manager and _proxy_manager.usable_count() == 0:
-            try:
+        # ── Verdict guarantee — direct as the LAST resort ─────────────────────
+        # All rounds failed ⇒ the pool is effectively unusable right now. A check
+        # must NEVER end as ERROR while the hosting server itself can reach
+        # Netflix: fall back to one direct attempt so the user always gets a
+        # real verdict (valid / invalid), never a vague error.
+        try:
+            if _proxy_manager:
                 _proxy_manager.note_direct_fallback()
                 _proxy_manager.ensure_pool()
-            except Exception:
-                pass
-            s, h = _one_attempt(session, None, "https://www.netflix.com/account/membership")
-            if s in ("OK", "INVALID", "LOGIN"):
-                return ("INVALID", h) if s == "LOGIN" else (s, h)
+        except Exception:
+            pass
+        s, h = _one_attempt(session, None, "https://www.netflix.com/account/membership")
+        if s in ("OK", "INVALID", "LOGIN"):
+            return ("INVALID", h) if s == "LOGIN" else (s, h)
 
         return "ERROR", ""
 

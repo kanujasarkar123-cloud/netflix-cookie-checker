@@ -46,12 +46,12 @@ logger = logging.getLogger(__name__)
 _DB_FILE = Path("proxy_pool.db")
 
 # ── Tunables (env-overridable) ────────────────────────────────────────────────
-REFRESH_INTERVAL   = int(os.environ.get("PROXY_REFRESH_INTERVAL", "300"))   # source re-fetch cycle
+REFRESH_INTERVAL   = int(os.environ.get("PROXY_REFRESH_INTERVAL", "120"))   # source re-fetch cycle (fast pool turnover)
 SCREEN_TIMEOUT     = float(os.environ.get("PROXY_SCREEN_TIMEOUT", "2.0"))   # TCP connect timeout
 SCREEN_WORKERS     = int(os.environ.get("PROXY_SCREEN_WORKERS", "400"))     # parallel TCP screens
 SCREEN_BATCH       = int(os.environ.get("PROXY_SCREEN_BATCH", "600"))       # proxies per screening pass
 MAX_POOL           = int(os.environ.get("PROXY_MAX_POOL", "8000"))          # hard cap on pool size
-POOL_MIN           = int(os.environ.get("PROXY_POOL_MIN", "40"))            # alive proxies below this → urgent refill
+POOL_MIN           = int(os.environ.get("PROXY_POOL_MIN", "80"))            # alive proxies below this → urgent refill
 SCREEN_ENABLED     = os.environ.get("PROXY_SCREEN", "1") not in ("0", "false", "False")
 PRELOAD_SOURCES    = os.environ.get("PROXY_PRELOAD", "1") not in ("0", "false", "False")
 _FETCH_TIMEOUT     = 15              # seconds per source HTTP fetch

@@ -88,7 +88,7 @@ BULK_CONCURRENCY = int(os.environ.get("BULK_CONCURRENCY", "16"))
 
 # Live progress: throttle status edits (Telegram allows ~1 edit/sec per message)
 _PROGRESS_EDIT_MIN_GAP = 1.0      # seconds between progress-message edits
-_MAX_GLOBAL_CHECKS = int(os.environ.get("MAX_GLOBAL_CHECKS", "6"))  # simultaneous user sessions
+_MAX_GLOBAL_CHECKS = int(os.environ.get("MAX_GLOBAL_CHECKS", "8"))  # simultaneous user sessions
 
 _CANCEL_SESSIONS: set[int] = set()
 # Maps uid → epoch timestamp when the session started.
@@ -469,9 +469,10 @@ def make_progress_bar(done: int, total: int, width: int = 20) -> str:
     if total == 0:
         return f"[{'░' * width}] 0%"
     filled = int(width * done / total)
-    bar = "▓" * filled + "░" * (width - filled)
+    # Solid blocks — crisp, clean render inside Telegram's <code> monospace
+    bar = "█" * filled + "░" * (width - filled)
     pct = int(100 * done / total)
-    return f"[{bar}] {pct}%"
+    return f"{bar}  {pct}%"
 
 
 def _yes_no(val) -> str:
@@ -590,7 +591,7 @@ def format_result_full(result: dict, index: int = 1, total: int = 1, source: str
     if total > 1:
         title += f"\n📊 Account #{index} of {total}"
 
-    lines = [f"<b>{title}</b>", ""]
+    lines = [f"<b>{title}</b>", "━━━━━━━━━━━━━━━━━━━━━━━━━━", ""]
 
     if source:
         lines.append(f"📁 Source: {source}")
@@ -600,35 +601,35 @@ def format_result_full(result: dict, index: int = 1, total: int = 1, source: str
     lines.append("👤 <b>Account Details:</b>")
 
     if name:
-        lines.append(f"• Name: {name}")
-    lines.append(f"• Email: <code>{email}</code>")
+        lines.append(f"• {'Name:'.ljust(18)} {name}")
+    lines.append(f"• {'Email:'.ljust(18)} <code>{email}</code>")
     if password:
-        lines.append(f"• Password: <code>{password}</code>")
-    lines.append(f"• Country: {_country_display(country)}")
-    lines.append(f"• Plan: {plan or 'Unknown'}")
-    lines.append(f"• Price: {price}")
-    lines.append(f"• Member Since: {since}")
-    lines.append(f"• Next Billing: {billing}")
-    lines.append(f"• Payment: {payment}")
+        lines.append(f"• {'Password:'.ljust(18)} <code>{password}</code>")
+    lines.append(f"• {'Country:'.ljust(18)} {_country_display(country)}")
+    lines.append(f"• {'Plan:'.ljust(18)} {plan or 'Unknown'}")
+    lines.append(f"• {'Price:'.ljust(18)} {price}")
+    lines.append(f"• {'Member Since:'.ljust(18)} {since}")
+    lines.append(f"• {'Next Billing:'.ljust(18)} {billing}")
+    lines.append(f"• {'Payment:'.ljust(18)} {payment}")
     if card_line and card_line != payment:
-        lines.append(f"• Card: {card_line}")
+        lines.append(f"• {'Card:'.ljust(18)} {card_line}")
     if phone:
-        lines.append(f"• Phone: <code>{phone}</code> (Yes)")
+        lines.append(f"• {'Phone:'.ljust(18)} <code>{phone}</code>")
     else:
-        lines.append(f"• Phone: N/A")
-    lines.append(f"• Quality: {quality}")
-    lines.append(f"• Streams: {streams}")
-    lines.append(f"• Hold Status: {'Yes' if (status == 'on_hold' or is_on_hold) else 'No'}")
+        lines.append(f"• {'Phone:'.ljust(18)} N/A")
+    lines.append(f"• {'Quality:'.ljust(18)} {quality}")
+    lines.append(f"• {'Streams:'.ljust(18)} {streams}")
+    lines.append(f"• {'Hold Status:'.ljust(18)} {'Yes' if (status == 'on_hold' or is_on_hold) else 'No'}")
 
     # Extra member
     has_extra = num_extra > 0 if isinstance(num_extra, int) else False
     extra_slot = str(num_extra) if has_extra else "N/A"
-    lines.append(f"• Extra Member: {'Yes' if has_extra else 'No'}")
-    lines.append(f"• Extra Member Slot: {extra_slot}")
+    lines.append(f"• {'Extra Member:'.ljust(18)} {'Yes' if has_extra else 'No'}")
+    lines.append(f"• {'Extra Member Slot:'.ljust(18)} {extra_slot}")
 
-    lines.append(f"• Email Verified: {_yes_no(email_verified)}")
-    lines.append(f"• Free Trial: {'Yes' if is_free_trial else 'No'}")
-    lines.append(f"• Membership Status: {ms_status}")
+    lines.append(f"• {'Email Verified:'.ljust(18)} {_yes_no(email_verified)}")
+    lines.append(f"• {'Free Trial:'.ljust(18)} {'Yes' if is_free_trial else 'No'}")
+    lines.append(f"• {'Membership Status:'.ljust(18)} {ms_status}")
 
     # Profiles — use accurate count from __ref array, names where available
     prof_count = result.get("profile_count") or (
@@ -1330,7 +1331,7 @@ async def send_hits_zip(update: Update, hits: list[tuple[dict, str, str]]) -> No
 
     caption_parts = [
         f"📦 <b>Netflix-Hits-{total_hits}x-{rand2}.zip</b>",
-        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
         _row("🌟", "Premium Hits", f"<b>{len(premium)}</b>"),
         _row("✅", "Normal Hits", f"<b>{len(normal)}</b>"),
     ]
@@ -1352,7 +1353,7 @@ async def send_hits_zip(update: Update, hits: list[tuple[dict, str, str]]) -> No
             "<code>On Hold/</code> — Payment-held (not hits)")
     caption_parts += [
         "<code>_SUMMARY.txt</code> — Overview",
-        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
         "<i>Each file: full details · cookie · login link</i>",
     ]
 
@@ -3348,10 +3349,10 @@ async def process_cookie_sets(
         return (
             f"{head}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"{bar}\n"
-            f"📦 <b>{done}</b> / {total} accounts\n\n"
-            f"✅ Hits: <b>{hits}</b>   ⏸️ Hold: <b>{on_hold}</b>\n"
-            f"🔓 Free: <b>{frees}</b>   ❌ Invalid: <b>{invalids}</b>\n"
+            f"<code>{bar}</code>\n"
+            f"📦 <b>{done}</b> / {total} accounts done\n\n"
+            f"✅ Hits: <b>{hits}</b>      ⏸️ Hold: <b>{on_hold}</b>\n"
+            f"🔓 Free: <b>{frees}</b>     ❌ Invalid: <b>{invalids}</b>\n"
             f"⚠️ Errors: <b>{errors}</b>\n\n"
             f"{speed_str}{eta_str}\n"
             f"{_route}"
@@ -3736,10 +3737,11 @@ def main() -> None:
     if not BOT_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN is not set.")
 
-    start_dashboard(port=5000)
-    print("✅ Status dashboard running on port 5000")
+    _dash_port = int(os.environ.get("PORT", "5000"))
+    start_dashboard(port=_dash_port)
+    print(f"✅ Status dashboard running on port {_dash_port}")
 
-    app = (
+    _builder = (
         Application.builder()
         .token(BOT_TOKEN)
         # Handle updates from multiple users truly concurrently
@@ -3749,8 +3751,20 @@ def main() -> None:
         .write_timeout(30)
         .connect_timeout(15)
         .pool_timeout(10)
-        .build()
     )
+    # Optional: route ALL Telegram API traffic through a proxy (http:// or socks5://).
+    # Escape hatch for hosts whose egress to api.telegram.org is unreliable
+    # (e.g. some Render free-tier regions).
+    _tg_proxy = os.environ.get("TELEGRAM_PROXY", "").strip()
+    if _tg_proxy:
+        from telegram.request import HTTPXRequest
+        print(f"🌐 Telegram API via proxy: {_tg_proxy}")
+        _builder = (
+            _builder
+            .request(HTTPXRequest(connection_pool_size=8, proxy_url=_tg_proxy))
+            .get_updates_request(HTTPXRequest(connection_pool_size=1, proxy_url=_tg_proxy))
+        )
+    app = _builder.build()
 
     # ── Command handlers ──────────────────────────────────────────────────
     app.add_handler(CommandHandler("start",    start_command))

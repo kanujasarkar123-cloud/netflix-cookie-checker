@@ -66,15 +66,16 @@ pip install -r requirements.txt
 | `TELEGRAM_BOT_TOKEN` | ✅ | — | Telegram bot token from @BotFather |
 | `MONGODB_URL` | ❌ | — | MongoDB connection string (hits saved when set) |
 | `ADMIN_ID` | ❌ | first `/setadmin` user | Telegram user ID of the admin |
-| `RACE_N` | ❌ | `4` | How many proxies to race simultaneously per check |
+| `RACE_N` | ❌ | `6` | How many proxies to race simultaneously per check |
 | `BULK_CONCURRENCY` | ❌ | `16` | How many cookies to check per batch window |
-| `MAX_GLOBAL_CHECKS` | ❌ | `6` | Max simultaneous user sessions before a friendly busy note |
-| `PROXY_REFRESH_INTERVAL` | ❌ | `300` | Seconds between source re-fetch cycles |
-| `PROXY_POOL_MIN` | ❌ | `40` | Alive proxies below this triggers an urgent refill |
+| `MAX_GLOBAL_CHECKS` | ❌ | `8` | Max simultaneous user sessions before a friendly busy note |
+| `PROXY_REFRESH_INTERVAL` | ❌ | `120` | Seconds between source re-fetch cycles |
+| `PROXY_POOL_MIN` | ❌ | `80` | Alive proxies below this triggers an urgent refill |
 | `PROXY_MAX_POOL` | ❌ | `8000` | Hard cap on pool size |
 | `PROXY_SCREEN` | ❌ | `1` | Background TCP screening of new IPs (`0` = off) |
 | `PROXY_SCREEN_TIMEOUT` | ❌ | `2.0` | TCP connect timeout for screening (seconds) |
 | `PROXY_PRELOAD` | ❌ | `1` | Seed the 9 built-in free proxy sources on first run |
+| `TELEGRAM_PROXY` | ❌ | — | Route all Telegram API traffic via a proxy (`http://…` or `socks5://…`) — escape hatch for hosts with unreliable egress to Telegram (e.g. some Render regions) |
 
 > **MongoDB URL tip:** If your password contains `@`, it is automatically percent-encoded — no manual fix needed.
 
@@ -127,8 +128,10 @@ The pool is **self-healing and self-seeding** — zero manual setup required:
 - **Background screening** — light 2s TCP-connect passes continuously promote alive IPs and drop dead ones (never blocks live checks)
 - **In-line screening** — one hard failure (timeout, 429, login-page) removes an IP from the pool instantly
 - **EMA latency scoring** — fastest IPs are raced first, but a rotating window keeps the *entire* pool in circulation (true IP rotation, not one hosted IP)
-- **Auto-refill** — all sources re-fetched in parallel every cycle; if alive count drops below `PROXY_POOL_MIN`, an urgent refill fires on the spot
+- **Auto-refill** — all sources re-fetched in parallel every 2-minute cycle; if alive count drops below `PROXY_POOL_MIN`, an urgent refill fires on the spot
+- **Retry rounds + verdict guarantee** — every cookie is re-raced across fresh proxy rounds (bulk ≈ 24 parallel attempts) until a definitive valid/invalid verdict; only if *every* round fails does the check fall back to one direct attempt — a user-facing ERROR is effectively impossible
 - **Consistency net** — pool momentarily empty → the check falls back to direct instead of erroring out, and counts the fallback in the admin panel
+- **Admin-controlled route** — the 🛡 Proxy Pool ON/OFF switch decides everything: **OFF = checks go straight through the hosting server's own IP** (direct), **ON = pool-only rotation** with the server IP never touched
 
 Admin panel (`/proxy` or 🛡 Proxy Pool button):
 
@@ -143,10 +146,10 @@ Admin panel (`/proxy` or 🛡 Proxy Pool button):
 
 | Env Var | Default | Suggested Range |
 |---|---|---|
-| `RACE_N` | `4` | `4`–`8` (more = faster verdicts on a large pool, more bandwidth) |
+| `RACE_N` | `6` | `4`–`10` (more = faster verdicts on a large pool, more bandwidth) |
 | `BULK_CONCURRENCY` | `16` | `16`–`32` (per-user parallel window) |
-| `MAX_GLOBAL_CHECKS` | `6` | `4`–`10` (simultaneous users) |
-| `PROXY_REFRESH_INTERVAL` | `300` | `180`–`600` (lower = fresher pool, more source traffic) |
+| `MAX_GLOBAL_CHECKS` | `8` | `4`–`12` (simultaneous users) |
+| `PROXY_REFRESH_INTERVAL` | `120` | `90`–`600` (lower = fresher pool, more source traffic) |
 
 ---
 
@@ -191,6 +194,12 @@ Aggregate counters only — cookies and account data are never exposed here.
 | **Replit** | `replit.nix` included — set secret `TELEGRAM_BOT_TOKEN` and run |
 
 > A Telegram bot is an always-on process — a tiny 1 vCPU / 1 GB VPS is enough. Runtime files (`proxy_pool.db`, `admin_id.txt`) are created automatically in the working directory; mount a volume if you want the proxy-score cache to survive redeploys.
+
+### Render notes (free tier)
+
+- The dashboard auto-binds `$PORT`, so the Web Service health check passes out of the box.
+- **Free web services sleep after ~15 min without inbound web traffic.** A polling bot generates none — keep it awake by pinging your `*.onrender.com` dashboard URL every 10 minutes with [UptimeRobot](https://uptimerobot.com) (free).
+- Seeing `Telegram network error: Timed out` in the logs? Switch the service region (e.g. Oregon / Singapore), or set the `TELEGRAM_PROXY` env var to route Telegram traffic through a working proxy.
 
 ---
 

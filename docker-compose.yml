@@ -11,9 +11,9 @@ services:
       # - ADMIN_ID=123456789
       # - MONGODB_URL=mongodb+srv://...
       # - BULK_CONCURRENCY=16
-      # - RACE_N=4
-      # - MAX_GLOBAL_CHECKS=6
-      # - PROXY_REFRESH_INTERVAL=300
-      # - PROXY_POOL_MIN=40
+      # - RACE_N=6
+      # - MAX_GLOBAL_CHECKS=8
+      # - PROXY_REFRESH_INTERVAL=120
+      # - PROXY_POOL_MIN=80
     ports:
       - "5000:5000"
