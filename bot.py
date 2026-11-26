@@ -259,7 +259,7 @@ def _settings_text(uid: int) -> str:
     dlv_lbl  = "💬 Card-by-Card" if delivery == "cards" else "📦 ZIP (default)"
     return (
         "⚙️ <b>Bot Settings</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
         f"📊 <b>Output Format:</b> {mode_lbl}\n"
         f"<i>How each account card is displayed</i>\n\n"
         f"📤 <b>Delivery Mode:</b> {dlv_lbl}\n"
@@ -367,7 +367,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if section == "check":
         text = (
             "🔍 <b>How to Check Cookies</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
             "<b>1.</b> Send me a cookie file — <code>.txt</code>, <code>.json</code>, "
             "<code>.zip</code> or <code>.rar</code>\n\n"
             "<b>2.</b> …or just paste the cookie text directly in the chat.\n\n"
@@ -1393,30 +1393,31 @@ async def mode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 def _welcome_text() -> str:
     return (
         "🎬 <b>NETFLIX COOKIE CHECKER</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "<i>⚡ Live validation · 🛡 IP-pool rotation · 📊 Real-time progress</i>\n\n"
-        "👉 <b>Just send a cookie file or paste cookie text</b> — no command "
-        "needed. I verify it live against Netflix and reply with a full card.\n\n"
-        "📋 <b>What I extract from each account:</b>\n"
-        "📧 Email  ·  🔑 Password  ·  📱 Phone\n"
-        "📦 Plan  ·  🎬 Quality  ·  💰 Price\n"
-        "💳 Card  ·  🌍 Country  ·  🗓️ Billing\n"
-        "👥 Profiles  ·  ✔️ Email verified  ·  📌 Hold status\n"
-        "🖥️ PC Login  ·  📱 Phone Login (one-click)\n\n"
-        "📦 <b>Bulk checks:</b>\n"
-        "Live progress → summary → ZIP of all hits\n"
-        "ZIP: <code>Premium Hits/</code> + <code>Normal Hits/</code> + "
-        "<code>_SUMMARY.txt</code>\n"
-        "Plus: 🏆 single best hit card after every batch\n\n"
-        "⚙️ Default: Basic card · 📦 ZIP delivery\n"
-        "<i>Use the buttons below to explore everything.</i>"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "🚀 <b>Just send a cookie file</b> or paste cookie text — "
+        "no command needed.\n\n"
+        "I check it live against Netflix and reply with a full "
+        "account card in seconds.\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "📋 <b>EVERY CARD SHOWS</b>\n\n"
+        "📧 Email · 🔑 Password · 📱 Phone\n"
+        "📦 Plan · 💰 Price · 🗓 Billing\n"
+        "🌍 Country · 🎬 Quality · 👥 Profiles\n"
+        "💳 Card · ✅ Verified · ⏸ Hold\n"
+        "🖥️ One-click PC / Phone login\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "📦 <b>BULK MODE</b>\n\n"
+        "Hundreds of cookies? Upload them all.\n"
+        "Live progress → summary → ZIP of hits\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "👇 <i>Use the buttons below</i>"
     )
 
 
 def _help_text() -> str:
     return (
         "📖 <b>Supported Cookie Formats</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
         "<b>1. Netscape (.txt)</b>\n"
         "<code>.netflix.com  TRUE  /  TRUE  9999  NetflixId  ct%3D…</code>\n\n"
         "<b>2. Pipe-combo (.txt)</b>\n"
@@ -1428,7 +1429,7 @@ def _help_text() -> str:
         "<b>5. ZIP / RAR (.zip / .rar)</b>\n"
         "Drop an archive — each <code>.txt</code> / <code>.json</code> inside "
         "= 1 account.\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "━━━━━━━━━━━━━━━━━━\n"
         "📦 <b>Bulk mode</b>\n"
         "Multi-account files → <b>live progress (updates every account)</b> → "
         "summary → ZIP.\n\n"
@@ -1441,7 +1442,7 @@ def _help_text() -> str:
         "• Cookie (Netscape format)\n"
         "• One-click login link (PC + Mobile)\n\n"
         "🏆 <b>After ZIP:</b> single Best Hit card (top-ranked account)\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "━━━━━━━━━━━━━━━━━━\n"
         "⚙️ <b>All Commands</b>\n\n"
         "/start — Main menu (buttons)\n"
         "/help — This page\n"
@@ -1451,7 +1452,10 @@ def _help_text() -> str:
         "/basic — Switch to Basic (compact) mode\n"
         "/fullinfo — Switch to Full Info mode\n"
         "/changepw — 🔐 [BETA] Change a Netflix account password\n"
-        "/cancel — Cancel any active flow"
+        "/cancel — Cancel any active flow\n"
+        "/myid — Show your ID &amp; admin status\n"
+        "/setadmin — 👑 Claim admin (first user only)\n"
+        "/proxy — 🛡 Admin-only proxy panel"
     )
 
 
@@ -1638,7 +1642,7 @@ async def changepw_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     await update.message.reply_text(
         "🔐 <b>Change Password</b>  <i>[BETA]</i>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
         "⚠️ <b>Warning:</b> This will permanently change the account's Netflix password.\n"
         "Only use this on accounts you own or have explicit permission to modify.\n\n"
         "Send /cancel at any time to abort.\n\n"
@@ -1769,7 +1773,7 @@ async def _handle_changepw_input(update: Update, uid: int, text: str) -> None:
         if result["success"]:
             await status_msg.edit_text(
                 "✅ <b>Password Changed Successfully!</b>  <i>[BETA]</i>\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"🔑 New password: <code>{new_pw}</code>\n\n"
                 "The old password no longer works.\n"
                 "<i>Keep this safe — the bot does not store it.</i>",
@@ -1778,7 +1782,7 @@ async def _handle_changepw_input(update: Update, uid: int, text: str) -> None:
         else:
             await status_msg.edit_text(
                 "❌ <b>Password Change Failed</b>  <i>[BETA]</i>\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"{result['message']}\n\n"
                 "<i>Check that the NetflixId and current password are correct, "
                 "then try again with /changepw</i>",
@@ -1972,7 +1976,7 @@ def _info_text(uid: int) -> str:
 
     return (
         "📊 <b>LIVE BOT STATS</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
         f"{_row('⏱️', 'Uptime', f'<b>{uptime}</b>')}\n"
         f"{_row('📦', 'Total checked', f'<b>{total_checks}</b>')}\n"
         f"{_row('✅', 'Hits', f'<b>{hits}</b>  ({hit_rate}% rate)')}\n"
@@ -2306,15 +2310,55 @@ async def setadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     if _ADMIN_ID is not None:
         if uid == _ADMIN_ID:
-            await update.message.reply_text("✅ You are already the admin.")
+            await update.message.reply_text(
+                "✅ <b>You are already the bot admin.</b>\n\n"
+                "🛡 Admin panel: /proxy\n"
+                "🆔 Your ID: <code>" + str(uid) + "</code>",
+                parse_mode=ParseMode.HTML,
+            )
         else:
-            await update.message.reply_text("⛔ Admin is already set.")
+            await update.message.reply_text(
+                "⛔ <b>Admin is already claimed.</b>\n\n"
+                "🆔 Admin ID: <code>" + str(_ADMIN_ID) + "</code>\n\n"
+                "<b>To reclaim admin for yourself:</b>\n"
+                "1. Render → Environment → set "
+                "<code>ADMIN_ID</code> to <code>" + str(uid) + "</code>\n"
+                "2. Save → service redeploys → you are admin\n\n"
+                "<i>(ADMIN_ID env var always wins at startup.)</i>",
+                parse_mode=ParseMode.HTML,
+            )
         return
     _ADMIN_ID = uid
     _save_admin_id(uid)
     await update.message.reply_text(
         "✅ <b>You are now the bot admin.</b>\n\n"
-        "Use /proxy to manage the proxy pool.",
+        "🛡 Admin panel: /proxy\n"
+        "   • Proxy pool ON/OFF (direct ↔ IP pool)\n"
+        "   • Refill / screen / add proxies &amp; sources\n\n"
+        "🆔 Your ID: <code>" + str(uid) + "</code>\n"
+        "<i>Tip: also set ADMIN_ID env var so redeploys keep you admin.</i>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the caller's Telegram ID and admin status."""
+    uid = update.effective_user.id if update.effective_user else None
+    if uid is None:
+        return
+    role = "🛡 Admin" if is_admin(uid) else "👤 User"
+    admin_line = (
+        "👑 Admin ID: <code>" + str(_ADMIN_ID) + "</code>"
+        if _ADMIN_ID is not None
+        else "👑 Admin: <i>not claimed yet — /setadmin</i>"
+    )
+    await update.message.reply_text(
+        "🆔 <b>YOUR IDENTITY</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"• Your ID: <code>{uid}</code>\n"
+        f"• Role: {role}\n"
+        f"• {admin_line}\n\n"
+        "<i>First user to run /setadmin becomes admin.</i>",
         parse_mode=ParseMode.HTML,
     )
 
@@ -2324,7 +2368,7 @@ def _proxy_panel_text() -> str:
     status = pm.status_text()
     st = pm.pool_stats()
     sources = pm.list_sources()
-    lines = ["🛡 <b>PROXY POOL ENGINE</b>", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━", ""]
+    lines = ["🛡 <b>PROXY POOL ENGINE</b>", "━━━━━━━━━━━━━━━━━━", ""]
     lines.append(status)
     lines.append("")
     lines.append(
@@ -2358,7 +2402,7 @@ def _proxy_panel_text() -> str:
             short = s[:52] + "…" if len(s) > 52 else s
             lines.append(f"<code>{i+1}. {short}</code>")
     lines.append("")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("━━━━━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
 
@@ -2412,7 +2456,12 @@ async def proxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not is_admin(uid):
         await update.message.reply_text(
             "⛔ <b>Admin only.</b>\n\n"
-            "Use /setadmin to claim the admin role first.",
+            "🛡 <b>/proxy</b> — admin panel:\n"
+            "   • Proxy pool ON/OFF (direct ↔ IP pool)\n"
+            "   • Refill / screen / add proxies &amp; sources\n\n"
+            "<i>Not admin yet?</i>\n"
+            "   • /myid — check your role\n"
+            "   • /setadmin — first user claims admin",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -3283,13 +3332,13 @@ async def process_cookies(
             f"🍪 <b>Detected:</b> 1 account — {len(c)} cookies "
             f"({', '.join(keys) or '…'})\n"
             f"🔍 Checking…  <b>0</b>/1\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            f"━━━━━━━━━━━━━━━━━━",
             parse_mode=ParseMode.HTML,
         )
     else:
         await status_msg.edit_text(
             f"⚡ <b>Bulk Check — Starting</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
             f"🍪 <b>Detected:</b> {len(sets)} accounts\n"
             f"🔍 Checking…  <b>0</b>/{len(sets)}",
             parse_mode=ParseMode.HTML,
@@ -3348,7 +3397,7 @@ async def process_cookie_sets(
         head = "🛑 <b>Bulk Check — Cancelled</b>" if cancelled else "⚡ <b>Bulk Check — Live</b>"
         return (
             f"{head}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
             f"<code>{bar}</code>\n"
             f"📦 <b>{done}</b> / {total} accounts done\n\n"
             f"✅ Hits: <b>{hits}</b>      ⏸️ Hold: <b>{on_hold}</b>\n"
@@ -3594,7 +3643,7 @@ async def process_cookie_sets(
         try:
             await status_msg.edit_text(
                 f"✅ <b>Check Complete!</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
                 f"{make_progress_bar(total, total)}\n"
                 f"📦 <b>{total}</b> / {total} accounts\n\n"
                 f"⏱️ {time_str}  ·  🚀 {speed:.1f} acc/min\n"
@@ -3778,6 +3827,7 @@ def main() -> None:
     app.add_handler(CommandHandler("cancel",   cancel_command))
     app.add_handler(CommandHandler("proxy",    proxy_command))
     app.add_handler(CommandHandler("setadmin", setadmin_command))
+    app.add_handler(CommandHandler("myid",     myid_command))
 
     # ── Inline button callbacks ───────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(menu_callback,          pattern=r"^menu:"))
@@ -3817,6 +3867,8 @@ def main() -> None:
             BotCommand("fullinfo", "Switch to Full Info mode"),
             BotCommand("changepw", "🔐 [BETA] Change a Netflix account password"),
             BotCommand("cancel",   "Cancel any active flow (e.g. /changepw)"),
+            BotCommand("myid",     "🆔 Show your ID & admin status"),
+            BotCommand("setadmin", "👑 Claim admin (first user only)"),
         ])
 
     app.post_init = _post_init
