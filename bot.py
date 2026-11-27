@@ -99,6 +99,46 @@ SESSION_TIMEOUT_SEC = 15 * 60  # 15 minutes
 # This is what /cancel uses — _HITS_STORE is only populated after a check finishes.
 _USER_SESSION: dict[int, int] = {}
 
+
+# ---------------------------------------------------------------------------
+# Per-user busy gate — while a user's check runs, NOTHING else responds for
+# that user (commands, buttons, text) except /cancel. Other users are never
+# affected: the lock is strictly individual.
+# ---------------------------------------------------------------------------
+
+_BUSY_REPLY = (
+    "⚠️ <b>A process is already running.</b>\n"
+    "Cancel it first, then try again:\n\n"
+    "/cancel"
+)
+
+
+def _gate_busy(fn):
+    """Wrap a handler so a user with an active check gets only the busy note."""
+    @functools.wraps(fn)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        uid = user.id if user else 0
+        if uid and uid in _ACTIVE_USERS:
+            if update.callback_query:
+                try:
+                    await update.callback_query.answer(
+                        "A process is already running — cancel it first (/cancel).",
+                        show_alert=True,
+                    )
+                except Exception:
+                    pass
+            elif update.effective_message:
+                try:
+                    await update.effective_message.reply_text(
+                        _BUSY_REPLY, parse_mode=ParseMode.HTML
+                    )
+                except Exception:
+                    pass
+            return
+        return await fn(update, context)
+    return wrapper
+
 # Bot's own Telegram username — set on startup, used as watermark in hit files.
 _BOT_USERNAME: str = ""
 
@@ -2076,8 +2116,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # ── Concurrency guard: one active check per user ───────────────────────
     if uid in _ACTIVE_USERS:
         await update.message.reply_text(
-            "⏳ <b>You already have a check running.</b>\n"
-            "Wait for it to finish or cancel it before starting a new one.",
+            "⚠️ <b>A process is already running.</b>\n"
+            "Cancel it first, then try again:\n\n"
+            "/cancel",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -2704,8 +2745,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # ── Concurrency guard ──────────────────────────────────────────────────
     if uid in _ACTIVE_USERS:
         await update.message.reply_text(
-            "⏳ <b>You already have a check running.</b>\n"
-            "Wait for it to finish or cancel it before starting a new one.",
+            "⚠️ <b>A process is already running.</b>\n"
+            "Cancel it first, then try again:\n\n"
+            "/cancel",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -2714,10 +2756,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     #    executor has a ceiling; beyond it users get a friendly busy note. ──
     if len(_ACTIVE_USERS) >= _MAX_GLOBAL_CHECKS:
         await update.message.reply_text(
-            f"🔥 <b>Bot is at full capacity right now</b> "
-            f"({len(_ACTIVE_USERS)}/{_MAX_GLOBAL_CHECKS} checks running).\n\n"
-            "Hang on a few seconds and send your cookies again — "
-            "your spot frees up as soon as a check finishes.",
+            "🔥 <b>Bot is at full capacity right now.</b>\n\n"
+            "Please try again in a few seconds.",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -3816,32 +3856,34 @@ def main() -> None:
     app = _builder.build()
 
     # ── Command handlers ──────────────────────────────────────────────────
-    app.add_handler(CommandHandler("start",    start_command))
-    app.add_handler(CommandHandler("help",     help_command))
-    app.add_handler(CommandHandler("info",     info_command))
-    app.add_handler(CommandHandler("mode",     mode_command))
-    app.add_handler(CommandHandler("fullinfo", fullinfo_command))
-    app.add_handler(CommandHandler("basic",    basic_command))
-    app.add_handler(CommandHandler("settings", settings_command))
-    app.add_handler(CommandHandler("changepw", changepw_command))
+    # All gated with _gate_busy: while a user's check runs, every command
+    # except /cancel answers with the busy note. /cancel stays free.
+    app.add_handler(CommandHandler("start",    _gate_busy(start_command)))
+    app.add_handler(CommandHandler("help",     _gate_busy(help_command)))
+    app.add_handler(CommandHandler("info",     _gate_busy(info_command)))
+    app.add_handler(CommandHandler("mode",     _gate_busy(mode_command)))
+    app.add_handler(CommandHandler("fullinfo", _gate_busy(fullinfo_command)))
+    app.add_handler(CommandHandler("basic",    _gate_busy(basic_command)))
+    app.add_handler(CommandHandler("settings", _gate_busy(settings_command)))
+    app.add_handler(CommandHandler("changepw", _gate_busy(changepw_command)))
     app.add_handler(CommandHandler("cancel",   cancel_command))
-    app.add_handler(CommandHandler("proxy",    proxy_command))
-    app.add_handler(CommandHandler("setadmin", setadmin_command))
-    app.add_handler(CommandHandler("myid",     myid_command))
+    app.add_handler(CommandHandler("proxy",    _gate_busy(proxy_command)))
+    app.add_handler(CommandHandler("setadmin", _gate_busy(setadmin_command)))
+    app.add_handler(CommandHandler("myid",     _gate_busy(myid_command)))
 
     # ── Inline button callbacks ───────────────────────────────────────────
-    app.add_handler(CallbackQueryHandler(menu_callback,          pattern=r"^menu:"))
-    app.add_handler(CallbackQueryHandler(proxy_admin_callback,  pattern=r"^proxy:"))
+    app.add_handler(CallbackQueryHandler(_gate_busy(menu_callback),          pattern=r"^menu:"))
+    app.add_handler(CallbackQueryHandler(_gate_busy(proxy_admin_callback),  pattern=r"^proxy:"))
     app.add_handler(CallbackQueryHandler(cancel_callback,       pattern=r"^cancel:"))
-    app.add_handler(CallbackQueryHandler(mode_callback,         pattern=r"^mode:"))
-    app.add_handler(CallbackQueryHandler(setmode_callback,      pattern=r"^setmode:"))
-    app.add_handler(CallbackQueryHandler(setdelivery_callback,  pattern=r"^setdelivery:"))
-    app.add_handler(CallbackQueryHandler(closesettings_callback, pattern=r"^closesettings$"))
-    app.add_handler(CallbackQueryHandler(loginlinks_callback,   pattern=r"^loginlinks:"))
-    app.add_handler(CallbackQueryHandler(besthits_callback,     pattern=r"^besthits:"))
-    app.add_handler(CallbackQueryHandler(navlinks_callback,     pattern=r"^navlinks:"))
+    app.add_handler(CallbackQueryHandler(_gate_busy(mode_callback),         pattern=r"^mode:"))
+    app.add_handler(CallbackQueryHandler(_gate_busy(setmode_callback),      pattern=r"^setmode:"))
+    app.add_handler(CallbackQueryHandler(_gate_busy(setdelivery_callback),  pattern=r"^setdelivery:"))
+    app.add_handler(CallbackQueryHandler(_gate_busy(closesettings_callback), pattern=r"^closesettings$"))
+    app.add_handler(CallbackQueryHandler(_gate_busy(loginlinks_callback),   pattern=r"^loginlinks:"))
+    app.add_handler(CallbackQueryHandler(_gate_busy(besthits_callback),     pattern=r"^besthits:"))
+    app.add_handler(CallbackQueryHandler(_gate_busy(navlinks_callback),     pattern=r"^navlinks:"))
     app.add_handler(CallbackQueryHandler(noop_callback,         pattern=r"^noop$"))
-    app.add_handler(CallbackQueryHandler(gen_link_callback,     pattern=r"^genlink:"))
+    app.add_handler(CallbackQueryHandler(_gate_busy(gen_link_callback),     pattern=r"^genlink:"))
 
     # ── Message handlers ──────────────────────────────────────────────────
     app.add_handler(MessageHandler(filters.Document.ALL,           handle_document))

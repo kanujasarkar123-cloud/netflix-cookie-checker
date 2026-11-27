@@ -34,12 +34,12 @@ docker compose up -d
 - **Fully button-based UI** — main menu, help, settings, live stats and proxy panel all reachable through inline buttons
 - **Live 1-by-1 progress** — the status message ticks after *every* completed account (`3/50`, `4/50`, …), never in batch jumps
 - **Proxy race engine v2** — races N proxies per check, IP-pool rotation across the whole pool, direct only as an emergency fallback
-- **Self-healing proxy pool** — 9 best-in-class free sources seeded automatically, refreshed in parallel every cycle, instant-use rotation (no slow pre-validation stage), EMA latency scoring, one-strike removal for dead IPs
+- **Hydra v2.0 proxy engine** — 108 verified-live sources (HTTP + SOCKS4 + SOCKS5, extracted from the Hydra Proxy Scraper bytecode), Hydra's exact IP:PORT regex parser, and real protocol-level handshakes for every proxy. Instant-use rotation, EMA latency scoring, one-strike removal
 - **Consistency safety net** — if the pool is momentarily empty the check falls back to direct instead of returning an error storm
 - **MongoDB integration** — hits, free accounts, and on-hold accounts saved automatically
 - **Multiple output modes** — Basic (compact) and Full Info
 - **Delivery modes** — individual messages or ZIP archive
-- **Multi-user ready** — concurrent sessions with per-user and global capacity guards
+- **Multi-user ready** — every user checks in their own parallel session; while your check runs, your other commands pause with a friendly "/cancel first" note — other users are never affected
 - **Change password** — [BETA] change a Netflix account password directly from Telegram
 
 ---
@@ -74,7 +74,9 @@ pip install -r requirements.txt
 | `PROXY_MAX_POOL` | ❌ | `8000` | Hard cap on pool size |
 | `PROXY_SCREEN` | ❌ | `1` | Background TCP screening of new IPs (`0` = off) |
 | `PROXY_SCREEN_TIMEOUT` | ❌ | `2.0` | TCP connect timeout for screening (seconds) |
-| `PROXY_PRELOAD` | ❌ | `1` | Seed the 9 built-in free proxy sources on first run |
+| `PROXY_PRELOAD` | ❌ | `1` | Seed the built-in Hydra source set on first run |
+| `PROXY_PER_SOURCE_CAP` | ❌ | `4000` | Max proxies kept per source per refresh cycle |
+| `PROXY_MERGE_HARD_CAP` | ❌ | `32000` | Absolute ceiling on in-memory pool entries |
 | `TELEGRAM_PROXY` | ❌ | — | Route all Telegram API traffic via a proxy (`http://…` or `socks5://…`) — escape hatch for hosts with unreliable egress to Telegram (e.g. some Render regions) |
 
 > **MongoDB URL tip:** If your password contains `@`, it is automatically percent-encoded — no manual fix needed.
@@ -123,9 +125,11 @@ python bot.py
 
 The pool is **self-healing and self-seeding** — zero manual setup required:
 
-- **9 built-in sources** (TheSpeedX, monosans, shiftytr, clarketm, mmpx12, sunny9577, roosterkid, ProxyScrape API, Geonode API) are seeded on first run — usually 4,000–7,000 proxies within the first minute
+- **108 built-in sources** (the Hydra v2.0 list: gfpcom, dinoz0rg, MuRongPIG, ErcinDedeoglu, zevtyardt, proxifly, TheSpeedX, monosans, OpenProxyList, ProxyScrape v2/v4 APIs and 90+ more — each live-verified before inclusion) are seeded on first run — tens of thousands of proxies within the first minutes
+- **SOCKS4 + SOCKS5 support** — socks lists are stored with their real protocol scheme and validated with the actual SOCKS handshake (greeting + CONNECT), not just an open TCP port
+- **Protocol-level screening** — HTTP proxies must serve a real request through the proxy (Hydra's Smart-mode engine); a port being open alone is never enough
 - **Instant use** — fresh proxies enter the pool as *new* and are eligible for real checks immediately; no slow pre-validation stage (free proxies die fast, so the real check *is* the screening)
-- **Background screening** — light 2s TCP-connect passes continuously promote alive IPs and drop dead ones (never blocks live checks)
+- **Background screening** — full protocol-handshake passes (HTTP / SOCKS4 / SOCKS5) continuously promote alive IPs and drop dead ones (never blocks live checks)
 - **In-line screening** — one hard failure (timeout, 429, login-page) removes an IP from the pool instantly
 - **EMA latency scoring** — fastest IPs are raced first, but a rotating window keeps the *entire* pool in circulation (true IP rotation, not one hosted IP)
 - **Auto-refill** — all sources re-fetched in parallel every 2-minute cycle; if alive count drops below `PROXY_POOL_MIN`, an urgent refill fires on the spot
@@ -173,7 +177,7 @@ Aggregate counters only — cookies and account data are never exposed here.
 |------|---------|
 | `bot.py` | Telegram handlers, button UI, formatters, streaming bulk processing, ZIP export |
 | `checker.py` | Cookie parsing, Netflix HTTP validation, proxy race + direct fallback |
-| `proxy_manager.py` | Proxy pool engine v2 — self-seeding sources, instant use, EMA scoring |
+| `proxy_manager.py` | Proxy pool engine v3 (Hydra) — 108 sources, protocol handshakes, EMA scoring |
 | `dashboard.py` | Flask status dashboard (port 5000) |
 | `mongodb_store.py` | MongoDB persistence for hits (auto-connects on startup) |
 | `password_changer.py` | [BETA] Netflix password changer |

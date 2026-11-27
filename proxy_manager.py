@@ -32,6 +32,7 @@ New in v2:
 import json
 import os
 import random
+import re
 import socket
 import sqlite3
 import threading
@@ -58,28 +59,169 @@ _FETCH_TIMEOUT     = 15              # seconds per source HTTP fetch
 _MAX_FAILURES      = 2               # soft failures before removal (hard failures remove instantly)
 _FLUSH_INTERVAL    = 60              # persistence debounce
 _PERSIST_LIMIT     = 12000           # max proxies written back to SQLite
+PER_SOURCE_CAP     = int(os.environ.get("PROXY_PER_SOURCE_CAP", "4000"))  # max proxies kept per source fetch
+MERGE_HARD_CAP     = int(os.environ.get("PROXY_MERGE_HARD_CAP", "32000")) # absolute in-RAM entry ceiling
 
+# ── Hydra v2.0 engine constants (extracted from its bytecode) ────────────────
+# Random User-Agent rotation per source fetch (Hydra's exact AGENTS list)
+_UA_POOL = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edg/123.0.0.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+]
 _FETCH_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    )
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
 }
+
+# Hydra's exact IP:PORT regex — full IPv4 + port range 1-65535 validation
+PROXY_RE = re.compile(
+    r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)"
+    r":(?:6553[0-5]|655[0-2]\d|65[0-4]\d{2}|6[0-4]\d{3}|[1-5]\d{4}|[1-9]\d{1,3}|[1-9])\b"
+)
+
+# Protocol-level validation targets (Hydra 'Smart' mode equivalents)
+_HTTP_PROBE_TARGET = b"http://www.gstatic.com/generate_204"   # real HTTP request THROUGH proxy
+_SOCKS_PROBE_ADDR = b"\x01\x01\x01\x01" + (80).to_bytes(2, "big")  # 1.1.1.1:80 for SOCKS CONNECT
 
 # ── Best-of-the-best free sources (all verified reachable) ───────────────────
 # Plain-text lists (ip:port per line) + two API sources handled by the parser.
-DEFAULT_SOURCES: list[str] = [
-    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
-    "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
-    "https://raw.githubusercontent.com/shiftytr/proxy-list/master/proxy.txt",
-    "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
-    "https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt",
-    "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/http_proxies.txt",
-    "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt",
-    "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
-    "https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc&protocols=http%2Chttps",
-]
+# ── Hydra v2.0 source list — 108 verified-live endpoints ────────────────
+# Extracted from the actual Hydra Proxy Scraper v2.0 bytecode and
+# live-verified one by one (each URL returned HTTP 200 + proxies today).
+HYDRA_SOURCES: dict[str, list[str]] = {
+    "http": [
+        "https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/http.txt",  # 544960 ips
+        "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/scraped_proxies/http.txt",  # 144037 ips
+        "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/http.txt",  # 101627 ips
+        "https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/http.txt",  # 65759 ips
+        "https://raw.githubusercontent.com/zevtyardt/proxy-list/main/http.txt",  # 64236 ips
+        "https://raw.githubusercontent.com/proxy4parsing/proxy-list/main/http.txt",  # 19031 ips
+        "https://raw.githubusercontent.com/yuceltoluyag/GoodProxy/main/raw.txt",  # 19031 ips
+        "https://raw.githubusercontent.com/TuanMinPay/live-proxy/master/http.txt",  # 8549 ips
+        "https://raw.githubusercontent.com/Anonym0usWork1221/Free-Proxies/main/proxy_files/http_proxies.txt",  # 6460 ips
+        "https://api.openproxylist.xyz/http.txt",  # 6379 ips
+        "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt",  # 6045 ips
+        "https://raw.githubusercontent.com/ObcbO/getproxy/master/file/http.txt",  # 5594 ips
+        "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt",  # 5228 ips
+        "https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/https.txt",  # 3254 ips
+        "https://raw.githubusercontent.com/B4RC0DE-TM/proxy-list/main/HTTP.txt",  # 3186 ips
+        "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",  # 2206 ips
+        "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt",  # 2206 ips
+        "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-https.txt",  # 2161 ips
+        "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/http.txt",  # 1937 ips
+        "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt",  # 1801 ips
+        "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/http_proxies.txt",  # 1471 ips
+        "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=ipport&format=text&protocol=https",  # 1332 ips
+        "https://raw.githubusercontent.com/zloi-user/hideip.me/main/https.txt",  # 954 ips
+        "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=ipport&format=text&protocol=http",  # 908 ips
+        "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",  # 807 ips
+        "https://raw.githubusercontent.com/hendrikbgr/Free-Proxy-Repo/master/proxy_list.txt",  # 684 ips
+        "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/http.txt",  # 618 ips
+        "https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=http&proxy_format=ipport&format=text",  # 607 ips
+        "https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/http.txt",  # 554 ips
+        "https://vakhov.github.io/fresh-proxy-list/http.txt",  # 528 ips
+        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",  # 487 ips
+        "https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt",  # 440 ips
+        "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",  # 400 ips
+        "https://raw.githubusercontent.com/im-razvan/proxy_list/main/http.txt",  # 268 ips
+        "https://raw.githubusercontent.com/saisuiu/Lionkings-Http-Proxys-Proxies/main/cnfree.txt",  # 200 ips
+        "https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/https.txt",  # 175 ips
+        "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=ipport&format=text&protocol=http&anonymity=elite",  # 162 ips
+        "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt",  # 150 ips
+        "https://raw.githubusercontent.com/ClearProxy/checked-proxy-list/main/http/raw/all.txt",  # 120 ips
+        "https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/http.txt",  # 82 ips
+        "https://raw.githubusercontent.com/prxchk/proxy-list/main/http.txt",  # 58 ips
+        "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt",  # 40 ips
+        "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/https.txt",  # 13 ips
+        "https://raw.githubusercontent.com/mmpx12/proxy-list/master/https.txt",  # 13 ips
+        "https://vakhov.github.io/fresh-proxy-list/https.txt",  # 6 ips
+    ],
+    "socks4": [
+        "https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/socks4.txt",  # 486507 ips
+        "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/scraped_proxies/socks4.txt",  # 106894 ips
+        "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/socks4.txt",  # 89713 ips
+        "https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/socks4.txt",  # 22475 ips
+        "https://raw.githubusercontent.com/zevtyardt/proxy-list/main/socks4.txt",  # 21538 ips
+        "https://raw.githubusercontent.com/TuanMinPay/live-proxy/master/socks4.txt",  # 5996 ips
+        "https://api.openproxylist.xyz/socks4.txt",  # 5844 ips
+        "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-socks4.txt",  # 1603 ips
+        "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt",  # 1469 ips
+        "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks4.txt",  # 1469 ips
+        "https://raw.githubusercontent.com/B4RC0DE-TM/proxy-list/main/SOCKS4.txt",  # 1004 ips
+        "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks4/data.txt",  # 839 ips
+        "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks4.txt",  # 661 ips
+        "https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks4.txt",  # 661 ips
+        "https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/socks4.txt",  # 630 ips
+        "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks4/data.txt",  # 568 ips
+        "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt",  # 401 ips
+        "https://raw.githubusercontent.com/zloi-user/hideip.me/main/socks4.txt",  # 255 ips
+        "https://vakhov.github.io/fresh-proxy-list/socks4.txt",  # 168 ips
+        "https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=socks4&proxy_format=ipport&format=text",  # 167 ips
+        "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=ipport&format=text&protocol=socks4",  # 164 ips
+        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks4&timeout=10000&country=all",  # 161 ips
+        "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS4_RAW.txt",  # 150 ips
+        "https://raw.githubusercontent.com/VPSLabCloud/VPSLab-Free-Proxy-List/main/socks4_all.txt",  # 140 ips
+        "https://raw.githubusercontent.com/ClearProxy/checked-proxy-list/main/socks4/raw/all.txt",  # 139 ips
+        "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/socks4.txt",  # 80 ips
+        "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/socks4.txt",  # 55 ips
+        "https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/socks4.txt",  # 38 ips
+        "https://raw.githubusercontent.com/prxchk/proxy-list/main/socks4.txt",  # 32 ips
+    ],
+    "socks5": [
+        "https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/socks5.txt",  # 498819 ips
+        "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/scraped_proxies/socks5.txt",  # 129851 ips
+        "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/socks5.txt",  # 100668 ips
+        "https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/socks5.txt",  # 30531 ips
+        "https://raw.githubusercontent.com/zevtyardt/proxy-list/main/socks5.txt",  # 23130 ips
+        "https://api.openproxylist.xyz/socks5.txt",  # 9582 ips
+        "https://raw.githubusercontent.com/TuanMinPay/live-proxy/master/socks5.txt",  # 9212 ips
+        "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",  # 5788 ips
+        "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt",  # 5788 ips
+        "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks5/data.txt",  # 5779 ips
+        "https://raw.githubusercontent.com/Anonym0usWork1221/Free-Proxies/main/proxy_files/socks5_proxies.txt",  # 5581 ips
+        "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",  # 1565 ips
+        "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks5.txt",  # 1565 ips
+        "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/socks5.txt",  # 1264 ips
+        "https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=socks5&proxy_format=ipport&format=text",  # 556 ips
+        "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=ipport&format=text&protocol=socks5",  # 549 ips
+        "https://raw.githubusercontent.com/ClearProxy/checked-proxy-list/main/socks5/raw/all.txt",  # 542 ips
+        "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/socks5.txt",  # 458 ips
+        "https://raw.githubusercontent.com/im-razvan/proxy_list/main/socks5.txt",  # 443 ips
+        "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-socks5.txt",  # 405 ips
+        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=10000&country=all",  # 401 ips
+        "https://raw.githubusercontent.com/VPSLabCloud/VPSLab-Free-Proxy-List/main/socks5_all.txt",  # 311 ips
+        "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks5.txt",  # 279 ips
+        "https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks5.txt",  # 279 ips
+        "https://raw.githubusercontent.com/B4RC0DE-TM/proxy-list/main/SOCKS5.txt",  # 257 ips
+        "https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/socks5.txt",  # 247 ips
+        "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/socks5_proxies.txt",  # 153 ips
+        "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",  # 147 ips
+        "https://raw.githubusercontent.com/zloi-user/hideip.me/main/socks5.txt",  # 140 ips
+        "https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/socks5.txt",  # 63 ips
+        "https://vakhov.github.io/fresh-proxy-list/socks5.txt",  # 21 ips
+        "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt",  # 11 ips
+        "https://raw.githubusercontent.com/prxchk/proxy-list/main/socks5.txt",  # 10 ips
+        "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/MostStable/socks5.txt",  # 5 ips
+    ],
+}
+
+_SEED_VERSION = "hydra2"   # bump to re-seed built-in sources into existing DBs
+
+
+def source_proto(url: str) -> str:
+    """Protocol a source yields — exact dict match first, then name heuristic."""
+    for proto, urls in HYDRA_SOURCES.items():
+        if url in urls:
+            return proto
+    u = url.lower()
+    if "socks5" in u:
+        return "socks5"
+    if "socks4" in u:
+        return "socks4"
+    return "http"
 
 # Proxy entry states
 ST_NEW, ST_ALIVE, ST_DEAD = 0, 1, 2
@@ -126,6 +268,84 @@ def _parse_host_port(proxy_url: str) -> tuple[str, int] | None:
     except Exception:
         pass
     return None
+
+
+# ---------------------------------------------------------------------------
+# Hydra v2.0 protocol-level validation (Smart-mode equivalents)
+# Every probe proves the proxy actually SPEAKS its protocol — not just that
+# the TCP port is open. Returns latency (s) on success, None on failure.
+# ---------------------------------------------------------------------------
+
+def _probe_http_proxy(host: str, port: int, timeout: float) -> float | None:
+    """Real HTTP request THROUGH the proxy (absolute-form GET, like Hydra)."""
+    try:
+        t0 = time.monotonic()
+        with socket.create_connection((host, port), timeout=timeout) as s:
+            s.settimeout(timeout)
+            s.sendall(
+                b"GET " + _HTTP_PROBE_TARGET + b" HTTP/1.1\r\n"
+                b"Host: www.gstatic.com\r\n"
+                b"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n"
+                b"Connection: close\r\n\r\n"
+            )
+            data = s.recv(256)
+            if not data:
+                return None
+            status_line = data.split(b"\r\n", 1)[0].decode("latin-1", "ignore")
+            m = re.search(r"\s(\d{3})\s", status_line)
+            if not m or m.group(1) not in ("200", "204", "301", "302"):
+                return None
+            return time.monotonic() - t0
+    except Exception:
+        return None
+
+
+def _probe_socks5_proxy(host: str, port: int, timeout: float) -> float | None:
+    """Real SOCKS5 handshake: greeting + CONNECT through the proxy (Hydra exact)."""
+    try:
+        t0 = time.monotonic()
+        with socket.create_connection((host, port), timeout=timeout) as s:
+            s.settimeout(timeout)
+            s.sendall(b"\x05\x01\x00")                     # v5, 1 method, no-auth
+            r = s.recv(2)
+            if len(r) < 2 or r[0] != 5 or r[1] != 0:       # must offer no-auth
+                return None
+            s.sendall(b"\x05\x01\x00\x01" + _SOCKS_PROBE_ADDR)
+            r = s.recv(10)
+            if len(r) < 2 or r[1] != 0:                    # CONNECT must succeed
+                return None
+            return time.monotonic() - t0
+    except Exception:
+        return None
+
+
+def _probe_socks4_proxy(host: str, port: int, timeout: float) -> float | None:
+    """Real SOCKS4 handshake: CONNECT request + success code 90 (Hydra exact)."""
+    try:
+        t0 = time.monotonic()
+        with socket.create_connection((host, port), timeout=timeout) as s:
+            s.settimeout(timeout)
+            s.sendall(b"\x04\x01" + _SOCKS_PROBE_ADDR[2:] + _SOCKS_PROBE_ADDR[:2] + b"\x00")
+            r = s.recv(8)
+            if len(r) < 8 or r[1] != 90:                   # 90 = request granted
+                return None
+            return time.monotonic() - t0
+    except Exception:
+        return None
+
+
+def probe_proxy(url: str, timeout: float) -> float | None:
+    """Dispatch to the right protocol-level validator based on the URL scheme."""
+    hp = _parse_host_port(url)
+    if not hp:
+        return None
+    host, port = hp
+    scheme = url.split("://", 1)[0]
+    if scheme == "socks5":
+        return _probe_socks5_proxy(host, port, timeout)
+    if scheme == "socks4":
+        return _probe_socks4_proxy(host, port, timeout)
+    return _probe_http_proxy(host, port, timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +466,7 @@ class ProxyManager:
             logger.info(f"proxy_manager: loaded {len(self._entries)} proxies from DB")
 
     def _seed_default_sources(self) -> None:
-        """Insert the built-in best-of-the-best sources once."""
+        """Insert the built-in Hydra source set once per list-version."""
         if not PRELOAD_SOURCES:
             return
         try:
@@ -254,16 +474,18 @@ class ProxyManager:
                 row = conn.execute(
                     "SELECT value FROM config WHERE key='defaults_seeded'"
                 ).fetchone()
-                if row and row[0] == "1":
+                if row and row[0] == _SEED_VERSION:
                     return
                 now = time.time()
-                for url in DEFAULT_SOURCES:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO sources (url, added_at) VALUES (?, ?)",
-                        (url, now),
-                    )
+                for proto, urls in HYDRA_SOURCES.items():
+                    for url in urls:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO sources (url, added_at) VALUES (?, ?)",
+                            (url, now),
+                        )
                 conn.execute(
-                    "INSERT OR REPLACE INTO config (key, value) VALUES ('defaults_seeded', '1')"
+                    "INSERT OR REPLACE INTO config (key, value) VALUES ('defaults_seeded', ?)",
+                    (_SEED_VERSION,),
                 )
         except Exception as exc:
             logger.warning(f"proxy_manager: seeding sources failed: {exc}")
@@ -314,20 +536,19 @@ class ProxyManager:
             return
 
         def _probe(entry: ProxyEntry) -> None:
-            hp = _parse_host_port(entry.url)
-            ok = False
-            if hp:
-                try:
-                    with socket.create_connection(hp, timeout=SCREEN_TIMEOUT):
-                        ok = True
-                except (OSError, socket.timeout):
-                    ok = False
+            lat = probe_proxy(entry.url, SCREEN_TIMEOUT + 0.5)
+            ok = lat is not None
             with self._lock:
                 if ok:
                     if entry.state != ST_ALIVE:
                         entry.state = ST_ALIVE
                     entry.last_ok = time.time()
                     entry.fail_count = 0
+                    # EMA latency scoring — fast proxies win _pick ordering
+                    entry.avg_latency = (
+                        _EMA_ALPHA * lat + (1 - _EMA_ALPHA) * entry.avg_latency
+                        if entry.avg_latency else lat
+                    )
                     self._dirty = True
                 else:
                     entry.fail_count += 1
@@ -352,19 +573,17 @@ class ProxyManager:
             return 0
 
         def _probe(entry: ProxyEntry) -> None:
-            hp = _parse_host_port(entry.url)
-            ok = False
-            if hp:
-                try:
-                    with socket.create_connection(hp, timeout=SCREEN_TIMEOUT):
-                        ok = True
-                except (OSError, socket.timeout):
-                    ok = False
+            lat = probe_proxy(entry.url, SCREEN_TIMEOUT + 0.5)
+            ok = lat is not None
             with self._lock:
                 if ok:
                     entry.state = ST_ALIVE
                     entry.last_ok = time.time()
                     entry.fail_count = 0
+                    entry.avg_latency = (
+                        _EMA_ALPHA * lat + (1 - _EMA_ALPHA) * entry.avg_latency
+                        if entry.avg_latency else lat
+                    )
                 else:
                     entry.fail_count += 1
                     if entry.fail_count >= 2:
@@ -410,40 +629,47 @@ class ProxyManager:
 
     # ── Source fetching ───────────────────────────────────────────────────
 
-    def _parse_source_text(self, text: str) -> list[str]:
-        """Parse a source payload — plain text lines or Geonode-style JSON."""
-        urls: list[str] = []
+    def _parse_source_text(self, text: str, url_hint: str = "") -> list[str]:
+        """Parse a source payload — Hydra v2.0 engine.
+
+        Regex-extracts IP:PORT from ANY format (plain text, HTML, JSON),
+        validates the full port range, dedupes, applies a per-source cap.
+        """
+        # Hydra cleanup: HTML entities used by some lists to hide the colon
+        text = text.replace("&colon;", ":").replace("&colon", ":")
+        proto = source_proto(url_hint) if url_hint else "http"
+        scheme = {"socks5": "socks5://", "socks4": "socks4://"}.get(proto, "http://")
+
+        urls: set[str] = set()
+        for ip_port in PROXY_RE.findall(text):
+            u = f"{scheme}{ip_port}"
+            urls.add(u)
+        # JSON API branch (e.g. Geonode) — regex can't see inside objects
         stripped = text.lstrip()
         if stripped.startswith("{"):
             try:
                 data = json.loads(stripped)
                 for item in data.get("data", []):
                     ip, port = item.get("ip"), item.get("port")
-                    if ip and port:
-                        u = normalize_proxy_url(f"{ip}:{port}")
-                        if u:
-                            urls.append(u)
-                return urls
+                    if ip and str(port).isdigit():
+                        u = f"{scheme}{ip}:{port}"
+                        if PROXY_RE.fullmatch(f"{ip}:{port}"):
+                            urls.add(u)
             except Exception:
                 pass
-        for line in text.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "://" in line and not line.startswith(("http://", "https://", "socks5://", "socks4://")):
-                continue
-            # strip inline junk ("1.2.3.4:8080 junk", "http://1.2.3.4:8080,")
-            token = line.split()[0].rstrip(",;")
-            u = normalize_proxy_url(token)
-            if u:
-                urls.append(u)
-        return urls
+        out = list(urls)
+        if len(out) > PER_SOURCE_CAP:
+            out = random.sample(out, PER_SOURCE_CAP)   # fair sample, like Hydra's shuffle
+        return out
 
     def _fetch_source(self, url: str) -> tuple[list[str], str]:
         try:
-            resp = requests.get(url, timeout=_FETCH_TIMEOUT, headers=_FETCH_HEADERS)
+            # Hydra UA rotation — random agent per fetch
+            headers = dict(_FETCH_HEADERS)
+            headers["User-Agent"] = random.choice(_UA_POOL)
+            resp = requests.get(url, timeout=_FETCH_TIMEOUT, headers=headers)
             resp.raise_for_status()
-            return self._parse_source_text(resp.text), ""
+            return self._parse_source_text(resp.text, url), ""
         except Exception as exc:
             return [], str(exc)
 
@@ -458,10 +684,13 @@ class ProxyManager:
         skipped = 0
         now = time.time()
         with self._lock:
+            room = max(0, MERGE_HARD_CAP - len(self._entries))
             for u in parsed:
                 if u in self._entries:
                     skipped += 1
                     continue
+                if added >= room:
+                    break   # hard ceiling — protect RAM, trim decides survivors
                 self._entries[u] = ProxyEntry(u, state=ST_NEW, added_at=now)
                 added += 1
             self._dirty = True
@@ -482,7 +711,7 @@ class ProxyManager:
             added_total = 0
             skipped_total = 0
             errors = 0
-            with ThreadPoolExecutor(max_workers=min(9, len(sources)),
+            with ThreadPoolExecutor(max_workers=min(30, len(sources)),
                                     thread_name_prefix="pfetch") as pool:
                 results = list(pool.map(self.fetch_from_url, sources))
             for added, skipped, err in results:
@@ -512,7 +741,7 @@ class ProxyManager:
         total_skipped = 0
         errors: list[str] = []
         from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=min(9, max(1, len(sources))),
+        with ThreadPoolExecutor(max_workers=min(30, max(1, len(sources))),
                                 thread_name_prefix="pfetch") as pool:
             results = list(pool.map(self.fetch_from_url, sources))
         for url, (added, skipped, err) in zip(sources, results):
