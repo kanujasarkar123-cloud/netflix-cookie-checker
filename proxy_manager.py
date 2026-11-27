@@ -210,6 +210,28 @@ HYDRA_SOURCES: dict[str, list[str]] = {
 
 _SEED_VERSION = "hydra2"   # bump to re-seed built-in sources into existing DBs
 
+# Legacy v2 defaults — dropped from the DB when the hydra2 seed runs
+_LEGACY_DEFAULTS = frozenset({
+    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
+    "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
+    "https://raw.githubusercontent.com/shiftytr/proxy-list/master/proxy.txt",
+    "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
+    "https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt",
+    "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/http_proxies.txt",
+    "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt",
+    "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
+    "https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc&protocols=http%2Chttps",
+})
+
+# All built-in URLs — locked: admins cannot delete these from the panel
+_BUILTIN_SOURCE_URLS = frozenset(
+    u for urls in HYDRA_SOURCES.values() for u in urls
+) | _LEGACY_DEFAULTS
+
+
+def is_builtin_source(url: str) -> bool:
+    return url in _BUILTIN_SOURCE_URLS
+
 
 def source_proto(url: str) -> str:
     """Protocol a source yields — exact dict match first, then name heuristic."""
@@ -483,6 +505,11 @@ class ProxyManager:
                             "INSERT OR IGNORE INTO sources (url, added_at) VALUES (?, ?)",
                             (url, now),
                         )
+                # drop the old v2 defaults — the Hydra set replaces them
+                conn.executemany(
+                    "DELETE FROM sources WHERE url=?",
+                    [(u,) for u in _LEGACY_DEFAULTS],
+                )
                 conn.execute(
                     "INSERT OR REPLACE INTO config (key, value) VALUES ('defaults_seeded', ?)",
                     (_SEED_VERSION,),
@@ -964,10 +991,25 @@ class ProxyManager:
             ).fetchall()
         if 0 <= index < len(rows):
             url = rows[index][0]
-            with _get_conn() as conn:
-                conn.execute("DELETE FROM sources WHERE url=?", (url,))
-            return url
+            return self.remove_source_url(url)
         return None
+
+    def remove_source_url(self, url: str) -> str | None:
+        """Delete a source by exact URL. Built-in Hydra sources are locked.
+
+        Returns the removed URL, 'builtin' if protected, None if absent.
+        """
+        if is_builtin_source(url):
+            return "builtin"
+        with _get_conn() as conn:
+            cur = conn.execute("DELETE FROM sources WHERE url=?", (url,))
+            if cur.rowcount:
+                return url
+        return None
+
+    def added_sources(self) -> list[str]:
+        """Only the manually-added (non built-in) sources."""
+        return [u for u in self.list_sources() if not is_builtin_source(u)]
 
     def list_sources(self) -> list[str]:
         try:

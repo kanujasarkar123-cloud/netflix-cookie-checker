@@ -2436,13 +2436,15 @@ def _proxy_panel_text() -> str:
         "⭐ EMA latency scoring keeps the fastest IPs at the front.\n"
         "🔄 Every check rotates to a different slice of the pool.</i>"
     )
-    if sources:
-        lines.append("")
-        lines.append(f"<b>🔗 Source URLs ({len(sources)}):</b>")
-        for i, s in enumerate(sources):
-            short = s[:52] + "…" if len(s) > 52 else s
-            lines.append(f"<code>{i+1}. {short}</code>")
+    # compact source summary — the full list lives in the paginated 🌐 view
+    from proxy_manager import is_builtin_source
+    builtin_n = sum(1 for s in sources if is_builtin_source(s))
+    added_n = len(sources) - builtin_n
     lines.append("")
+    lines.append(
+        f"🔗 <b>Source URLs:</b> {len(sources)} "
+        f"(🔒 {builtin_n} built-in · 📥 {added_n} added)"
+    )
     lines.append("━━━━━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
@@ -2450,6 +2452,7 @@ def _proxy_panel_text() -> str:
 def _proxy_panel_markup(pm) -> InlineKeyboardMarkup:
     toggle_label = "🔴 Turn OFF" if pm.enabled else "🟢 Turn ON"
     cpw_label = "🔴 Proxy ChangePW: OFF" if not pm.changepw_proxy_enabled else "🟢 Proxy ChangePW: ON"
+    n_sources = len(pm.list_sources())
     rows = [
         [
             InlineKeyboardButton(toggle_label,          callback_data="proxy:toggle"),
@@ -2464,7 +2467,8 @@ def _proxy_panel_markup(pm) -> InlineKeyboardMarkup:
             InlineKeyboardButton("🔄 Re-fetch Sources", callback_data="proxy:refreshsources"),
         ],
         [
-            InlineKeyboardButton(cpw_label,             callback_data="proxy:togglechangepw"),
+            InlineKeyboardButton(f"🌐 Sources ({n_sources})", callback_data="proxy:srclist:0"),
+            InlineKeyboardButton(cpw_label,                  callback_data="proxy:togglechangepw"),
         ],
     ]
     if pm.count:
@@ -2472,23 +2476,92 @@ def _proxy_panel_markup(pm) -> InlineKeyboardMarkup:
             InlineKeyboardButton("📄 Download List",    callback_data="proxy:downloadlist"),
             InlineKeyboardButton("🗑 Clear All",        callback_data="proxy:clear"),
         ])
-    sources = pm.list_sources()
-    if sources:
-        src_row = []
-        for i in range(len(sources)):
-            src_row.append(
-                InlineKeyboardButton(f"🗑 Src#{i+1}", callback_data=f"proxy:delsource:{i}")
-            )
-            if len(src_row) == 4:
-                rows.append(src_row)
-                src_row = []
-        if src_row:
-            rows.append(src_row)
     rows.append([
         InlineKeyboardButton("🔄 Refresh Panel", callback_data="proxy:refresh"),
         InlineKeyboardButton("🏠 Main Menu",     callback_data="menu:home"),
     ])
     return InlineKeyboardMarkup(rows)
+
+
+# ── Paginated source list (10 per page) ──────────────────────────────────────
+# uid → (page, snapshot of sources at render time). The delete button resolves
+# the URL from this snapshot so a concurrent change can never delete the wrong
+# source. Built-in Hydra sources are shown 🔒 and have no delete button.
+_SRC_VIEW: dict[int, tuple[int, list[str]]] = {}
+_SOURCES_PER_PAGE = 10
+
+
+def _sources_page_text(pm, page: int) -> tuple[str, int, int]:
+    """Returns (text, page, total_pages)."""
+    from proxy_manager import is_builtin_source
+    sources = pm.list_sources()
+    total = max(1, (len(sources) + _SOURCES_PER_PAGE - 1) // _SOURCES_PER_PAGE)
+    page = max(0, min(page, total - 1))
+    start = page * _SOURCES_PER_PAGE
+    chunk = sources[start:start + _SOURCES_PER_PAGE]
+
+    builtin_n = sum(1 for s in sources if is_builtin_source(s))
+    added_n = len(sources) - builtin_n
+    lines = [
+        "🌐 <b>SOURCE URLS</b>",
+        f"━ {len(sources)} total · 🔒 {builtin_n} built-in (locked) · 📥 {added_n} added ━",
+        "",
+    ]
+    for i, s in enumerate(chunk, start=start + 1):
+        tag = "🔒" if is_builtin_source(s) else "📥"
+        short = s[:56] + "…" if len(s) > 56 else s
+        lines.append(f"{tag}<code>{i}. {short}</code>")
+    lines.append("")
+    lines.append("<i>📥 added sources can be removed — 🔒 built-ins are protected.</i>")
+    return "\n".join(lines), page, total
+
+
+def _sources_page_markup(pm, page: int, total: int) -> InlineKeyboardMarkup:
+    from proxy_manager import is_builtin_source
+    sources = pm.list_sources()
+    start = page * _SOURCES_PER_PAGE
+    chunk = sources[start:start + _SOURCES_PER_PAGE]
+
+    rows: list[list[InlineKeyboardButton]] = []
+    # delete buttons only for manually-added sources on this page (2 per row)
+    del_row: list[InlineKeyboardButton] = []
+    for i, s in enumerate(chunk, start=start):
+        if not is_builtin_source(s):
+            del_row.append(
+                InlineKeyboardButton(f"🗑 #{i+1}", callback_data=f"proxy:delsource:{i}")
+            )
+            if len(del_row) == 2:
+                rows.append(del_row)
+                del_row = []
+    if del_row:
+        rows.append(del_row)
+
+    prev_page = max(0, page - 1)
+    next_page = min(total - 1, page + 1)
+    rows.append([
+        InlineKeyboardButton("◀️ Prev", callback_data=f"proxy:srclist:{prev_page}"),
+        InlineKeyboardButton(f"📄 {page + 1}/{total}", callback_data="noop"),
+        InlineKeyboardButton("Next ▶️", callback_data=f"proxy:srclist:{next_page}"),
+    ])
+    rows.append([
+        InlineKeyboardButton("🛡 Panel",   callback_data="proxy:refresh"),
+        InlineKeyboardButton("🏠 Main Menu", callback_data="menu:home"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+async def _render_sources_page(query, pm, page: int, uid: int) -> None:
+    """Edit the panel message into a sources page + snapshot for deletes."""
+    text, page, total = _sources_page_text(pm, page)
+    _SRC_VIEW[uid] = (page, list(pm.list_sources()))
+    try:
+        await query.message.edit_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=_sources_page_markup(pm, page, total),
+        )
+    except Exception:
+        pass
 
 
 async def proxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2622,12 +2695,39 @@ async def proxy_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await query.answer("Proxy not found.", show_alert=True)
             return
 
+    elif action.startswith("proxy:srclist:"):
+        try:
+            page = int(action.split(":")[2])
+        except (ValueError, IndexError):
+            page = 0
+        await _render_sources_page(query, pm, page, uid)
+        return
+
     elif action.startswith("proxy:delsource:"):
+        # resolve the exact URL from the page snapshot — never the wrong source
         try:
             idx = int(action.split(":")[2])
         except (ValueError, IndexError):
             return
-        pm.remove_source(idx)
+        snapshot = _SRC_VIEW.get(uid, (0, []))[1]
+        url = snapshot[idx] if 0 <= idx < len(snapshot) else None
+        if not url:
+            await query.answer("Source not found — page stale, reopen 🌐 Sources.", show_alert=True)
+            return
+        result = pm.remove_source_url(url)
+        if result == "builtin":
+            await query.answer(
+                "🔒 Built-in Hydra source — locked, cannot be removed.",
+                show_alert=True,
+            )
+        elif result is None:
+            await query.answer("Source already gone.", show_alert=True)
+        else:
+            await query.answer("🗑 Source removed.", show_alert=False)
+        # stay on the sources view, refresh the current page
+        page = _SRC_VIEW.get(uid, (0, []))[0]
+        await _render_sources_page(query, pm, page, uid)
+        return
 
     elif action == "proxy:clear":
         pm.clear_proxies()
