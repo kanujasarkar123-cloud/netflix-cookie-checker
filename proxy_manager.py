@@ -806,10 +806,14 @@ class ProxyManager:
 
     # ── In-check feedback (the real screening) ────────────────────────────
 
-    def mark_failure(self, url: str, hard: bool = False) -> None:
+    def mark_failure(
+        self, url: str, hard: bool = False, latency: float | None = None
+    ) -> None:
         """
-        Record a failure. hard=True → removed instantly (429 / timeout /
-        login-page / connection error). hard=False → after _MAX_FAILURES.
+        Record a failure. hard=True → removed instantly (429 / login-page /
+        connection error). hard=False → removed after _MAX_FAILURES.
+        latency: EMA penalty for timeout-style failures — the proxy stays in
+        the pool but sinks in the latency ranking until it proves itself fast.
         """
         if not url:
             return
@@ -819,6 +823,10 @@ class ProxyManager:
                 return
             e.fail_count += 1
             e.last_fail = time.time()
+            if latency is not None and latency > 0:
+                e.avg_latency = (
+                    _EMA_ALPHA * latency + (1 - _EMA_ALPHA) * (e.avg_latency or latency)
+                )
             if hard or e.fail_count >= _MAX_FAILURES:
                 self._entries.pop(url, None)   # dead → gone immediately
             self._dirty = True

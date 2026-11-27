@@ -1237,12 +1237,14 @@ def check_cookie(cookie_text: str, generate_token: bool = True, bulk_mode: bool 
             "message": f"No Netflix session cookies found. Got: {', '.join(list(cookies.keys())[:8])}",
         }
 
-    # Aggressive timeouts — fastest healthy proxy wins the race; slower ones
-    # simply lose, get one-strike-removed from the pool, and never slow the
-    # verdict down. Dead proxies still die instantly (TCP fail = no wait).
-    _proxy_timeout  = 4  if bulk_mode else 6    # seconds per proxy attempt
-    _direct_timeout = 8  if bulk_mode else 12   # direct gets more time — most reliable
-    _timeout = _direct_timeout                  # used by NFToken
+    # Fast-fail timeouts — a proxy that hasn't answered within ~2s loses the
+    # round; the race immediately serves fresh IPs (Jio-grade proxies answer
+    # well under 2s, slower ones sink via EMA + soft demotion instead of an
+    # instant kill, so the pool stays alive). Direct is ONLY the last resort —
+    # while the pool is healthy it never runs, so no 8s wait in practice.
+    _proxy_timeout  = 2   if bulk_mode else 2.5  # seconds per proxy attempt
+    _direct_timeout = 8   if bulk_mode else 12   # last-resort guarantee only
+    _timeout = _direct_timeout                   # used by NFToken
     session, using_curl = _make_session(bulk_mode)
     session.cookies.clear()   # flush response-cookies from the previous check
 
@@ -1302,7 +1304,23 @@ def check_cookie(cookie_text: str, generate_token: bool = True, bulk_mode: bool 
             except Exception as exc:
                 logger.debug("_one_attempt error proxy=%s: %s", bool(proxy_dict), exc)
                 if proxy_dict and _proxy_manager:
-                    _proxy_manager.mark_failure(_purl(proxy_dict), hard=True)
+                    emsg = str(exc).lower()
+                    is_timeout = (
+                        "timed out" in emsg or "timeout" in emsg
+                        or isinstance(exc, (
+                            getattr(requests.exceptions, "ConnectTimeout", ()),
+                            getattr(requests.exceptions, "ReadTimeout", ()),
+                        ))
+                    )
+                    if is_timeout:
+                        # Slow, not dead → soft demote + EMA latency penalty
+                        # (sinks in ranking; removed only after repeated slow runs)
+                        _proxy_manager.mark_failure(
+                            _purl(proxy_dict), hard=False, latency=_proxy_timeout
+                        )
+                    else:
+                        # Connect refused / reset / DNS → truly dead, hard-remove
+                        _proxy_manager.mark_failure(_purl(proxy_dict), hard=True)
                 return "FAIL", ""
 
         def _smart_check(url):
@@ -1400,12 +1418,13 @@ def check_cookie(cookie_text: str, generate_token: bool = True, bulk_mode: bool 
                 race_pool.shutdown(wait=True)
 
         # ── Retry rounds — race fresh proxies until a definitive verdict ──────
-        # Each round races RACE_N fresh IPs per URL (pool rotation), so a round
-        # that starts on dead proxies gets another shot with brand-new ones.
-        #   bulk   → 2 rounds ≈ 24 parallel proxy attempts per cookie
-        #   single → 3 rounds ≈ 36 parallel proxy attempts per cookie
+        # Each round races RACE_N fresh IPs per URL (pool rotation); a round now
+        # caps at ~3.5s, so rounds are cheap — more of them keeps the
+        # "rotate until a verdict" guarantee without ever waiting on a slow IP.
+        #   bulk   → 3 rounds ≈ 36 parallel proxy attempts per cookie
+        #   single → 4 rounds ≈ 48 parallel proxy attempts per cookie
         # A verdict (OK / INVALID) is returned the moment any round confirms it.
-        _rounds = 2 if bulk_mode else 3
+        _rounds = 3 if bulk_mode else 4
         for _round in range(_rounds):
             s, h = _smart_check("https://www.netflix.com/account/membership")
             if s in ("OK", "INVALID"):
